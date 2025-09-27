@@ -544,11 +544,31 @@ class ImageToPDFApp:
     # Convert Tab Methods
     def browse_convert_images(self, e):
         """Browse for images in convert tab"""
-        self.convert_file_picker.pick_files(
-            dialog_title="Select Images",
-            file_type=ft.FilePickerFileType.IMAGE,
-            allow_multiple=True
-        )
+        print("DEBUG: browse_convert_images called")
+        try:
+            self.convert_file_picker.pick_files(
+                dialog_title="Select Images",
+                file_type=ft.FilePickerFileType.IMAGE,
+                allow_multiple=True
+            )
+            print("DEBUG: pick_files called successfully")
+        except Exception as ex:
+            print(f"DEBUG: Error calling pick_files: {ex}")
+            # Fallback: try to open a simple file dialog
+            import tkinter as tk
+            from tkinter import filedialog
+            root = tk.Tk()
+            root.withdraw()  # Hide the main window
+            files = filedialog.askopenfilenames(
+                title="Select Images",
+                filetypes=[("Image files", "*.jpg *.jpeg *.png *.bmp *.tiff *.gif")]
+            )
+            root.destroy()
+            if files:
+                # Convert to Flet file objects
+                from flet import FilePickerFile
+                file_objects = [FilePickerFile(path=f) for f in files]
+                self.on_convert_files_picked(type('obj', (object,), {'files': file_objects})())
         
     def on_convert_files_picked(self, e: ft.FilePickerResultEvent):
         """Handle file picker result for convert tab"""
@@ -819,11 +839,31 @@ class ImageToPDFApp:
     # Annotate Tab Methods
     def browse_annotate_pdfs(self, e):
         """Browse for PDFs to annotate"""
-        self.annotate_file_picker.pick_files(
-            dialog_title="Select PDFs to Annotate",
-            allowed_extensions=["pdf"],
-            allow_multiple=True
-        )
+        print("DEBUG: browse_annotate_pdfs called")
+        try:
+            self.annotate_file_picker.pick_files(
+                dialog_title="Select PDFs to Annotate",
+                allowed_extensions=["pdf"],
+                allow_multiple=True
+            )
+            print("DEBUG: pick_files called successfully")
+        except Exception as ex:
+            print(f"DEBUG: Error calling pick_files: {ex}")
+            # Fallback: try to open a simple file dialog
+            import tkinter as tk
+            from tkinter import filedialog
+            root = tk.Tk()
+            root.withdraw()  # Hide the main window
+            files = filedialog.askopenfilenames(
+                title="Select PDFs to Annotate",
+                filetypes=[("PDF files", "*.pdf")]
+            )
+            root.destroy()
+            if files:
+                # Convert to Flet file objects
+                from flet import FilePickerFile
+                file_objects = [FilePickerFile(path=f) for f in files]
+                self.on_annotate_files_picked(type('obj', (object,), {'files': file_objects})())
         
     def on_annotate_files_picked(self, e: ft.FilePickerResultEvent):
         """Handle PDF file picker result"""
