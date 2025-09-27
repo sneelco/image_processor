@@ -6,7 +6,7 @@ a = Analysis(
     ['main.py'],
     pathex=[],
     binaries=[],
-    datas=[('communities.yaml', '.')],
+    datas=[],
     hiddenimports=[
         'flet',
         'flet.fastapi',
