@@ -855,20 +855,18 @@ class ImageToPDFApp:
     def browse_annotate_pdfs(self, e):
         """Browse for PDFs to annotate"""
         print("DEBUG: browse_annotate_pdfs called")
-        try:
-            self.annotate_file_picker.pick_files(
-                dialog_title="Select PDFs to Annotate",
-                allowed_extensions=["pdf"],
-                allow_multiple=True
-            )
-            print("DEBUG: pick_files called successfully")
-        except Exception as ex:
-            print(f"DEBUG: Error calling pick_files: {ex}")
-            # Fallback: try to open a simple file dialog
+        
+        # Use tkinter directly for Linux builds as Flet FilePicker has issues
+        import platform
+        import os
+        if platform.system() == "Linux":
+            print("DEBUG: Using tkinter fallback for Linux (PDFs)")
             import tkinter as tk
             from tkinter import filedialog
             root = tk.Tk()
             root.withdraw()  # Hide the main window
+            root.lift()  # Bring to front
+            root.attributes('-topmost', True)  # Force on top
             files = filedialog.askopenfilenames(
                 title="Select PDFs to Annotate",
                 filetypes=[("PDF files", "*.pdf")]
@@ -877,7 +875,6 @@ class ImageToPDFApp:
             if files:
                 print(f"DEBUG: Tkinter selected {len(files)} PDF files")
                 # Convert to Flet file objects - create a simple object that mimics FilePickerFile
-                import os
                 class MockFilePickerFile:
                     def __init__(self, path):
                         self.path = path
@@ -885,6 +882,17 @@ class ImageToPDFApp:
                 
                 file_objects = [MockFilePickerFile(f) for f in files]
                 self.on_annotate_files_picked(type('obj', (object,), {'files': file_objects})())
+        else:
+            # Use Flet FilePicker for Windows and macOS
+            try:
+                self.annotate_file_picker.pick_files(
+                    dialog_title="Select PDFs to Annotate",
+                    allowed_extensions=["pdf"],
+                    allow_multiple=True
+                )
+                print("DEBUG: Flet pick_files called successfully")
+            except Exception as ex:
+                print(f"DEBUG: Error calling pick_files: {ex}")
         
     def on_annotate_files_picked(self, e: ft.FilePickerResultEvent):
         """Handle PDF file picker result"""
