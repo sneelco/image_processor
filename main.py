@@ -1,27 +1,28 @@
 #!/usr/bin/env python3
 """
-Cross-Platform Image to PDF Processor using Flet
+Enhanced Image to PDF Processor using Flet
 
 This application allows users to:
-1. Select 2 images using file picker
-2. Enter date and class number  
-3. Select community name from dropdown
-4. Generate a multi-page PDF with text overlay on each page
+1. Convert tab: Drag & drop images to create basic PDFs
+2. Annotate tab: Add community text to existing PDFs
+3. Community Management tab: Manage community data
 
 Works on Windows, Linux (Wayland/X11), and macOS
 """
 
 import flet as ft
-from PIL import Image
+from PIL import Image, ExifTags
 from reportlab.pdfgen import canvas
 from reportlab.lib.colors import black, white
 from reportlab.lib.pagesizes import letter
+from reportlab.lib.utils import ImageReader
 import tempfile
 import os
 from pathlib import Path
 import base64
 from datetime import datetime
 import yaml
+import io
 
 class ImageToPDFApp:
     def __init__(self, page: ft.Page):
@@ -38,9 +39,13 @@ class ImageToPDFApp:
         # Load community data from file or use defaults
         self.community_data = self.load_communities()
         
-        # Variables to store images
-        self.image_files = [None, None]
-        self.image_containers = []
+        # Variables for Convert tab
+        self.convert_images = []  # List of image file info
+        self.convert_drop_area = None
+        
+        # Variables for Annotate tab
+        self.annotate_pdfs = []  # List of PDF files
+        self.annotate_drop_area = None
         
         # Processing log
         self.processing_log = []
@@ -85,111 +90,6 @@ class ImageToPDFApp:
         except Exception as e:
             self.show_error(f"Error saving communities file: {e}")
             
-    def refresh_community_dropdown(self):
-        """Refresh the community dropdown options"""
-        # Update main process tab dropdown
-        self.community_dropdown.options = [
-            ft.dropdown.Option(key) for key in sorted(self.community_data.keys())
-        ]
-        
-        # Update communities tab dropdowns if they exist
-        if hasattr(self, 'edit_community_dropdown'):
-            self.edit_community_dropdown.options = [
-                ft.dropdown.Option(key) for key in sorted(self.community_data.keys())
-            ]
-            
-        if hasattr(self, 'delete_community_dropdown'):
-            self.delete_community_dropdown.options = [
-                ft.dropdown.Option(key) for key in sorted(self.community_data.keys())
-            ]
-            
-        # Update status
-        if hasattr(self, 'communities_status'):
-            self.communities_status.value = f"Total communities: {len(self.community_data)}"
-            
-        self.page.update()
-        
-    def add_community_tab(self, e):
-        """Add community from the communities tab"""
-        name = self.new_community_name.value.strip()
-        description = self.new_community_desc.value.strip()
-        
-        if not name:
-            self.show_communities_status("Error: Community name is required", ft.Colors.RED)
-            return
-            
-        if not description:
-            self.show_communities_status("Error: Description is required", ft.Colors.RED)
-            return
-            
-        if name in self.community_data:
-            self.show_communities_status(f"Error: Community '{name}' already exists", ft.Colors.RED)
-            return
-            
-        # Add the community
-        self.community_data[name] = description
-        self.save_communities()
-        self.refresh_community_dropdown()
-        
-        # Clear the form
-        self.new_community_name.value = ""
-        self.new_community_desc.value = ""
-        
-        self.show_communities_status(f"Added community '{name}' successfully", ft.Colors.GREEN)
-        
-    def on_edit_community_selected(self, e):
-        """Handle community selection for editing"""
-        if e.control.value:
-            selected_key = e.control.value
-            self.edit_community_desc.value = self.community_data.get(selected_key, "")
-            self.edit_community_desc.disabled = False
-            self.edit_button.disabled = False
-            self.page.update()
-            
-    def update_community_tab(self, e):
-        """Update community from the communities tab"""
-        selected_key = self.edit_community_dropdown.value
-        new_description = self.edit_community_desc.value.strip()
-        
-        if not selected_key:
-            self.show_communities_status("Error: Please select a community to edit", ft.Colors.RED)
-            return
-            
-        if not new_description:
-            self.show_communities_status("Error: Description is required", ft.Colors.RED)
-            return
-            
-        # Update the community
-        self.community_data[selected_key] = new_description
-        self.save_communities()
-        self.refresh_community_dropdown()
-        
-        self.show_communities_status(f"Updated community '{selected_key}' successfully", ft.Colors.GREEN)
-        
-    def delete_community_tab(self, e):
-        """Delete community from the communities tab"""
-        selected_key = self.delete_community_dropdown.value
-        
-        if not selected_key:
-            self.show_communities_status("Error: Please select a community to delete", ft.Colors.RED)
-            return
-            
-        # Delete the community
-        del self.community_data[selected_key]
-        self.save_communities()
-        self.refresh_community_dropdown()
-        
-        # Clear the dropdown
-        self.delete_community_dropdown.value = None
-        
-        self.show_communities_status(f"Deleted community '{selected_key}' successfully", ft.Colors.GREEN)
-        
-    def show_communities_status(self, message, color):
-        """Show status message in communities tab"""
-        self.communities_status.value = message
-        self.communities_status.color = color
-        self.page.update()
-        
     def setup_ui(self):
         """Setup the main user interface with tabs"""
         # Title
@@ -206,9 +106,14 @@ class ImageToPDFApp:
             animation_duration=300,
             tabs=[
                 ft.Tab(
-                    text="Process",
+                    text="Convert",
                     icon=ft.Icons.PICTURE_AS_PDF,
-                    content=self.create_process_tab()
+                    content=self.create_convert_tab()
+                ),
+                ft.Tab(
+                    text="Annotate",
+                    icon=ft.Icons.TEXT_FIELDS,
+                    content=self.create_annotate_tab()
                 ),
                 ft.Tab(
                     text="Communities",
@@ -226,56 +131,235 @@ class ImageToPDFApp:
             ])
         )
         
-    def create_process_tab(self):
-        """Create the main processing tab content"""
-        # Image selection section
-        image_section = self.create_image_section()
+    def create_convert_tab(self):
+        """Create the convert tab - drag images to create basic PDFs"""
+        # Instructions
+        instructions = ft.Text(
+            "Drag and drop 2 images to create a PDF (no community text added)",
+            size=16,
+            text_align=ft.TextAlign.CENTER,
+            color=ft.Colors.BLUE_GREY_600
+        )
         
-        # Two-column layout for inputs and log
-        inputs_and_log_row = self.create_two_column_layout()
+        # Drag and drop area
+        self.convert_drop_area = ft.Container(
+            content=ft.Column([
+                ft.Icon(ft.Icons.CLOUD_UPLOAD, size=64, color=ft.Colors.BLUE_300),
+                ft.Text("Drop Images Here", size=20, weight=ft.FontWeight.BOLD),
+                ft.Text("or click to browse", size=14, color=ft.Colors.GREY_600),
+                ft.Text("Supports: JPG, PNG, BMP, TIFF, GIF", size=12, color=ft.Colors.GREY_500)
+            ], alignment=ft.MainAxisAlignment.CENTER, horizontal_alignment=ft.CrossAxisAlignment.CENTER),
+            width=600,
+            height=200,
+            bgcolor=ft.Colors.BLUE_50,
+            border=ft.border.all(2, ft.Colors.BLUE_200),
+            border_radius=10,
+            alignment=ft.alignment.center,
+            on_click=self.browse_convert_images
+        )
         
-        # Button row
-        button_row = ft.Row([
+        # Image preview area
+        self.convert_preview_row = ft.Row([], alignment=ft.MainAxisAlignment.CENTER, spacing=20)
+        
+        # Convert form
+        self.convert_date = ft.TextField(
+            label="Date", 
+            hint_text="e.g., 2024-01-15", 
+            width=200,
+            on_change=self.on_convert_date_changed
+        )
+        self.convert_class = ft.TextField(
+            label="Class Number", 
+            hint_text="e.g., 1", 
+            width=150,
+            on_change=self.on_convert_class_changed
+        )
+        self.convert_community = ft.Dropdown(
+            label="Community (optional)",
+            options=[ft.dropdown.Option(key) for key in sorted(self.community_data.keys())],
+            width=250,
+            on_change=self.on_convert_community_changed
+        )
+        
+        convert_form = ft.Row([
+            self.convert_date,
+            self.convert_class,
+            self.convert_community
+        ], spacing=20, alignment=ft.MainAxisAlignment.CENTER)
+        
+        # Output directory
+        self.convert_output_dir = ft.TextField(
+            label="Output Directory",
+            value=str(Path.cwd()),
+            width=400,
+            read_only=True
+        )
+        
+        convert_output_row = ft.Row([
+            self.convert_output_dir,
+            ft.ElevatedButton("Browse", on_click=self.browse_convert_output)
+        ], spacing=10, alignment=ft.MainAxisAlignment.CENTER)
+        
+        # Buttons
+        convert_buttons = ft.Row([
             ft.ElevatedButton(
-                text="Process Images to PDF",
-                on_click=self.process_images,
-                disabled=True,
-                style=ft.ButtonStyle(
-                    bgcolor=ft.Colors.GREEN,
-                    color=ft.Colors.WHITE,
-                    padding=ft.padding.all(15)
-                ),
-                width=200
+                "Convert to PDF",
+                on_click=self.convert_images_to_pdf,
+                style=ft.ButtonStyle(bgcolor=ft.Colors.GREEN, color=ft.Colors.WHITE),
+                width=150,
+                disabled=True
             ),
             ft.ElevatedButton(
-                text="Reset All",
-                on_click=self.reset_all,
-                style=ft.ButtonStyle(
-                    bgcolor=ft.Colors.ORANGE,
-                    color=ft.Colors.WHITE,
-                    padding=ft.padding.all(15)
-                ),
-                width=120
+                "Clear All",
+                on_click=self.clear_convert,
+                style=ft.ButtonStyle(bgcolor=ft.Colors.ORANGE, color=ft.Colors.WHITE),
+                width=100
             )
-        ], alignment=ft.MainAxisAlignment.CENTER, spacing=20)
+        ], spacing=20, alignment=ft.MainAxisAlignment.CENTER)
         
-        # Store reference to process button
-        self.process_btn = button_row.controls[0]
+        self.convert_btn = convert_buttons.controls[0]
         
-        # Status text
-        self.status_text = ft.Text(
-            "Select 2 images to get started",
+        # Status
+        self.convert_status = ft.Text(
+            "Drop 2 images to get started",
             size=14,
             color=ft.Colors.GREY_600,
             text_align=ft.TextAlign.CENTER
         )
         
+        # File picker for convert
+        self.convert_file_picker = ft.FilePicker(on_result=self.on_convert_files_picked)
+        self.page.overlay.append(self.convert_file_picker)
+        
+        # Directory picker for convert
+        self.convert_dir_picker = ft.FilePicker(on_result=self.on_convert_dir_picked)
+        self.page.overlay.append(self.convert_dir_picker)
+        
         return ft.Column([
-            image_section,
-            ft.Divider(),
-            inputs_and_log_row,
-            ft.Container(button_row, padding=ft.padding.all(20)),
-            ft.Container(self.status_text, padding=ft.padding.all(10))
+            ft.Container(instructions, padding=ft.padding.all(20)),
+            ft.Container(self.convert_drop_area, alignment=ft.alignment.center),
+            ft.Container(height=20),  # Spacer
+            self.convert_preview_row,
+            ft.Container(height=20),  # Spacer
+            ft.Container(
+                ft.Column([
+                    ft.Text("PDF Details", size=16, weight=ft.FontWeight.BOLD, text_align=ft.TextAlign.CENTER),
+                    convert_form,
+                    ft.Container(height=10),
+                    convert_output_row
+                ]),
+                padding=ft.padding.all(20),
+                bgcolor=ft.Colors.GREY_50,
+                border_radius=10
+            ),
+            ft.Container(height=20),
+            convert_buttons,
+            ft.Container(self.convert_status, padding=ft.padding.all(10))
+        ], scroll=ft.ScrollMode.AUTO)
+        
+    def create_annotate_tab(self):
+        """Create the annotate tab - add community text to existing PDFs"""
+        # Instructions
+        instructions = ft.Text(
+            "Select existing PDFs and add community information to them",
+            size=16,
+            text_align=ft.TextAlign.CENTER,
+            color=ft.Colors.PURPLE_600
+        )
+        
+        # PDF selection
+        self.annotate_pdf_list = ft.Column([], spacing=10)
+        
+        pdf_section = ft.Container(
+            content=ft.Column([
+                ft.Text("Select PDFs to Annotate", size=16, weight=ft.FontWeight.BOLD),
+                ft.ElevatedButton(
+                    "Browse for PDFs",
+                    on_click=self.browse_annotate_pdfs,
+                    style=ft.ButtonStyle(bgcolor=ft.Colors.PURPLE, color=ft.Colors.WHITE),
+                    width=150
+                ),
+                self.annotate_pdf_list
+            ], spacing=10),
+            padding=ft.padding.all(20),
+            bgcolor=ft.Colors.PURPLE_50,
+            border=ft.border.all(1, ft.Colors.PURPLE_200),
+            border_radius=10
+        )
+        
+        # Community selection
+        self.annotate_community = ft.Dropdown(
+            label="Select Community",
+            options=[ft.dropdown.Option(key) for key in sorted(self.community_data.keys())],
+            width=300,
+            on_change=self.on_annotate_community_changed
+        )
+        
+        # Output directory
+        self.annotate_output_dir = ft.TextField(
+            label="Output Directory",
+            value=str(Path.cwd()),
+            width=400,
+            read_only=True
+        )
+        
+        annotate_form = ft.Container(
+            content=ft.Column([
+                ft.Text("Annotation Details", size=16, weight=ft.FontWeight.BOLD),
+                self.annotate_community,
+                ft.Container(height=10),
+                ft.Row([
+                    self.annotate_output_dir,
+                    ft.ElevatedButton("Browse", on_click=self.browse_annotate_output)
+                ], spacing=10)
+            ], spacing=10),
+            padding=ft.padding.all(20),
+            bgcolor=ft.Colors.GREY_50,
+            border_radius=10
+        )
+        
+        # Buttons
+        annotate_buttons = ft.Row([
+            ft.ElevatedButton(
+                "Annotate PDFs",
+                on_click=self.annotate_pdfs_action,
+                style=ft.ButtonStyle(bgcolor=ft.Colors.PURPLE, color=ft.Colors.WHITE),
+                width=150,
+                disabled=True
+            ),
+            ft.ElevatedButton(
+                "Clear Selection",
+                on_click=self.clear_annotate,
+                style=ft.ButtonStyle(bgcolor=ft.Colors.ORANGE, color=ft.Colors.WHITE),
+                width=120
+            )
+        ], spacing=20, alignment=ft.MainAxisAlignment.CENTER)
+        
+        self.annotate_btn = annotate_buttons.controls[0]
+        
+        # Status
+        self.annotate_status = ft.Text(
+            "Select PDFs and community to get started",
+            size=14,
+            color=ft.Colors.GREY_600,
+            text_align=ft.TextAlign.CENTER
+        )
+        
+        # File pickers for annotate
+        self.annotate_file_picker = ft.FilePicker(on_result=self.on_annotate_files_picked)
+        self.page.overlay.append(self.annotate_file_picker)
+        
+        self.annotate_dir_picker = ft.FilePicker(on_result=self.on_annotate_dir_picked)
+        self.page.overlay.append(self.annotate_dir_picker)
+        
+        return ft.Column([
+            ft.Container(instructions, padding=ft.padding.all(20)),
+            pdf_section,
+            ft.Container(height=20),
+            annotate_form,
+            ft.Container(height=20),
+            annotate_buttons,
+            ft.Container(self.annotate_status, padding=ft.padding.all(10))
         ], scroll=ft.ScrollMode.AUTO)
         
     def create_communities_tab(self):
@@ -412,128 +496,10 @@ class ImageToPDFApp:
             edit_section,
             ft.Container(height=20),  # Spacer
             delete_section,
-            ft.Container(self.communities_status, padding=ft.padding.all(20))
+            ft.Container(self.communities_status, padding=ft.padding.all(20)),
+            ft.Container(height=20),
+            self.create_log_section()
         ], scroll=ft.ScrollMode.AUTO)
-        
-    def create_image_section(self):
-        """Create the image selection section"""
-        # File picker
-        self.file_picker = ft.FilePicker(on_result=self.on_file_picker_result)
-        self.page.overlay.append(self.file_picker)
-        
-        # Image containers
-        image_row = ft.Row([], alignment=ft.MainAxisAlignment.CENTER, spacing=20)
-        
-        for i in range(2):
-            container = self.create_image_container(i)
-            self.image_containers.append(container)
-            image_row.controls.append(container)
-            
-        return ft.Container(
-            ft.Column([
-                ft.Text("Select Images", size=18, weight=ft.FontWeight.BOLD),
-                image_row
-            ]),
-            padding=ft.padding.all(20)
-        )
-        
-    def create_image_container(self, index):
-        """Create an individual image container"""
-        placeholder = ft.Column([
-            ft.Icon(ft.Icons.IMAGE, size=50, color=ft.Colors.GREY_400),
-            ft.Text(f"Image {index + 1}", size=16, weight=ft.FontWeight.BOLD),
-            ft.Text("Click to select", size=12, color=ft.Colors.GREY_600)
-        ], alignment=ft.MainAxisAlignment.CENTER, horizontal_alignment=ft.CrossAxisAlignment.CENTER)
-        
-        container = ft.Container(
-            content=placeholder,
-            width=250,
-            height=200,
-            bgcolor=ft.Colors.GREY_100,
-            border=ft.border.all(2, ft.Colors.GREY_300),
-            border_radius=10,
-            padding=ft.padding.all(10),
-            on_click=lambda e, idx=index: self.select_image(idx),
-            ink=True
-        )
-        
-        return container
-        
-    def create_two_column_layout(self):
-        """Create the two-column layout with inputs and log"""
-        # Left column - Input fields
-        inputs_column = self.create_input_fields()
-        
-        # Right column - Processing log
-        log_column = self.create_log_section()
-        
-        # Two-column row
-        return ft.Row([
-            ft.Container(
-                content=inputs_column,
-                expand=1,
-                padding=ft.padding.all(10)
-            ),
-            ft.Container(
-                content=log_column,
-                expand=1,
-                padding=ft.padding.all(10)
-            )
-        ], spacing=20)
-        
-    def create_input_fields(self):
-        """Create the input fields section"""
-        # Date input
-        self.date_field = ft.TextField(
-            label="Date",
-            hint_text="e.g., 2024-01-15 or Jan15",
-            width=200
-        )
-        
-        # Class number input
-        self.class_field = ft.TextField(
-            label="Class Number",
-            hint_text="e.g., 1, 2, 3...",
-            width=150
-        )
-        
-        # Community dropdown (simplified - no management buttons here)
-        self.community_dropdown = ft.Dropdown(
-            label="Community",
-            options=[ft.dropdown.Option(key) for key in sorted(self.community_data.keys())],
-            width=250
-        )
-        
-        # Output directory
-        self.output_dir_field = ft.TextField(
-            label="Output Directory",
-            value=str(Path.cwd()),
-            width=300,
-            read_only=True
-        )
-        
-        output_dir_btn = ft.ElevatedButton(
-            text="Browse",
-            on_click=self.select_output_dir
-        )
-        
-        # Directory picker
-        self.dir_picker = ft.FilePicker(on_result=self.on_dir_picker_result)
-        self.page.overlay.append(self.dir_picker)
-        
-        return ft.Column([
-            ft.Text("Enter Details", size=16, weight=ft.FontWeight.BOLD),
-            ft.Row([self.date_field, self.class_field], spacing=20),
-            ft.Container(self.community_dropdown, padding=ft.padding.only(top=10)),
-            ft.Container(
-                ft.Text("Output Directory", size=14, weight=ft.FontWeight.BOLD),
-                padding=ft.padding.only(top=15, bottom=5)
-            ),
-            ft.Row([
-                self.output_dir_field, 
-                output_dir_btn
-            ], spacing=10, alignment=ft.MainAxisAlignment.START)
-        ])
         
     def create_log_section(self):
         """Create the processing log section"""
@@ -550,7 +516,8 @@ class ImageToPDFApp:
             border=ft.border.all(1, ft.Colors.GREY_300),
             border_radius=5,
             padding=ft.padding.all(10),
-            height=200
+            height=150,
+            width=None
         )
         
         clear_log_btn = ft.ElevatedButton(
@@ -563,197 +530,534 @@ class ImageToPDFApp:
             width=100
         )
         
-        return ft.Column([
-            ft.Text("Processing History", size=16, weight=ft.FontWeight.BOLD),
-            self.log_container_content,
-            ft.Container(
-                clear_log_btn,
-                alignment=ft.alignment.center,
-                padding=ft.padding.only(top=10)
-            )
-        ])
-        
-    def select_image(self, index):
-        """Handle image selection"""
-        self.current_image_index = index
-        self.file_picker.pick_files(
-            dialog_title=f"Select Image {index + 1}",
-            file_type=ft.FilePickerFileType.IMAGE,
-            allow_multiple=False
-        )
-        
-    def on_file_picker_result(self, e: ft.FilePickerResultEvent):
-        """Handle file picker result"""
-        if e.files and len(e.files) > 0:
-            file = e.files[0]
-            self.image_files[self.current_image_index] = file
-            self.update_image_preview(self.current_image_index, file)
-            self.update_status()
-        
-    def show_community_dialog(self, title, edit_key=None):
-        """Show dialog for adding or editing community"""
-        print(f"Opening dialog: {title}")  # Debug print
-        
-        # Form fields
-        name_field = ft.TextField(
-            label="Community Name",
-            value=edit_key if edit_key else "",
-            width=300,
-            read_only=bool(edit_key)  # Don't allow changing name when editing
-        )
-        
-        description_field = ft.TextField(
-            label="Description",
-            value=self.community_data.get(edit_key, "") if edit_key else "",
-            width=400,
-            multiline=True,
-            min_lines=3,
-            max_lines=5
-        )
-        
-        def save_community(e):
-            print("Save button clicked")  # Debug print
-            name = name_field.value.strip()
-            description = description_field.value.strip()
-            
-            if not name:
-                self.show_error("Community name is required")
-                return
-                
-            if not description:
-                self.show_error("Description is required")
-                return
-                
-            # Check for duplicate name (only when adding)
-            if not edit_key and name in self.community_data:
-                self.show_error(f"Community '{name}' already exists")
-                return
-                
-            # Save the community
-            self.community_data[name] = description
-            self.save_communities()
-            self.refresh_community_dropdown()
-            
-            # Set as selected if it's a new community
-            if not edit_key:
-                self.community_dropdown.value = name
-                
-            self.page.update()
-            self.close_dialog(dialog)
-            
-        def cancel_action(e):
-            print("Cancel button clicked")  # Debug print
-            self.close_dialog(dialog)
-            
-        # Create the dialog content
-        content_column = ft.Column([
-            name_field,
-            description_field
-        ], height=200, spacing=10, tight=True)
-        
-        dialog = ft.AlertDialog(
-            modal=True,
-            title=ft.Text(title),
-            content=content_column,
-            actions=[
-                ft.TextButton("Cancel", on_click=cancel_action),
-                ft.TextButton("Save", on_click=save_community, style=ft.ButtonStyle(color=ft.Colors.BLUE))
-            ],
-            actions_alignment=ft.MainAxisAlignment.END
-        )
-        
-        # Make sure to close any existing dialog first
-        if hasattr(self.page, 'dialog') and self.page.dialog:
-            self.page.dialog.open = False
-            
-        self.page.dialog = dialog
-        dialog.open = True
-        self.page.update()
-        print("Dialog should be visible now")  # Debug print
-            
-    def update_image_preview(self, index, file):
-        """Update image preview in container"""
-        try:
-            with open(file.path, 'rb') as f:
-                image_data = f.read()
-                
-            image_base64 = base64.b64encode(image_data).decode()
-            
-            preview = ft.Column([
-                ft.Image(
-                    src_base64=image_base64,
-                    width=200,
-                    height=150,
-                    fit=ft.ImageFit.CONTAIN
-                ),
-                ft.Text(
-                    file.name,
-                    size=10,
-                    color=ft.Colors.GREY_700,
-                    text_align=ft.TextAlign.CENTER,
-                    max_lines=2,
-                    overflow=ft.TextOverflow.ELLIPSIS
+        return ft.Container(
+            content=ft.Column([
+                ft.Text("Processing History", size=16, weight=ft.FontWeight.BOLD),
+                self.log_container_content,
+                ft.Container(
+                    clear_log_btn,
+                    alignment=ft.alignment.center,
+                    padding=ft.padding.only(top=10)
                 )
-            ], alignment=ft.MainAxisAlignment.CENTER, horizontal_alignment=ft.CrossAxisAlignment.CENTER)
+            ]),
+            padding=ft.padding.all(20),
+            bgcolor=ft.Colors.BLUE_GREY_50,
+            border_radius=10
+        )
+        
+    def correct_image_orientation(self, image):
+        """Correct image orientation based on EXIF data"""
+        try:
+            for orientation in ExifTags.TAGS.keys():
+                if ExifTags.TAGS[orientation] == 'Orientation':
+                    break
             
-            self.image_containers[index].content = preview
-            self.image_containers[index].bgcolor = ft.Colors.GREEN_50
-            self.image_containers[index].border = ft.border.all(2, ft.Colors.GREEN_300)
+            if hasattr(image, '_getexif'):
+                exif = image._getexif()
+                if exif is not None:
+                    orientation_value = exif.get(orientation)
+                    
+                    if orientation_value == 3:
+                        image = image.rotate(180, expand=True)
+                    elif orientation_value == 6:
+                        image = image.rotate(270, expand=True)
+                    elif orientation_value == 8:
+                        image = image.rotate(90, expand=True)
+        except (AttributeError, KeyError, TypeError):
+            pass  # No EXIF data or orientation info
             
+        return image
+        
+    # Convert Tab Methods
+    def browse_convert_images(self, e):
+        """Browse for images in convert tab"""
+        self.convert_file_picker.pick_files(
+            dialog_title="Select Images",
+            file_type=ft.FilePickerFileType.IMAGE,
+            allow_multiple=True
+        )
+        
+    def on_convert_files_picked(self, e: ft.FilePickerResultEvent):
+        """Handle file picker result for convert tab"""
+        if e.files:
+            # Take only first 2 files
+            self.convert_images = e.files[:2]
+            self.update_convert_preview()
+            self.update_convert_status()
+            
+    def update_convert_preview(self):
+        """Update the preview of selected images"""
+        self.convert_preview_row.controls.clear()
+        
+        for i, file in enumerate(self.convert_images):
+            try:
+                with open(file.path, 'rb') as f:
+                    image_data = f.read()
+                image_base64 = base64.b64encode(image_data).decode()
+                
+                # Create preview with reorder buttons
+                preview_container = ft.Container(
+                    content=ft.Column([
+                        ft.Text(f"Page {i+1}", size=12, weight=ft.FontWeight.BOLD),
+                        ft.Image(
+                            src_base64=image_base64,
+                            width=150,
+                            height=150,
+                            fit=ft.ImageFit.CONTAIN
+                        ),
+                        ft.Text(file.name, size=10, max_lines=2, text_align=ft.TextAlign.CENTER),
+                        ft.Row([
+                            ft.IconButton(
+                                ft.Icons.ARROW_BACK,
+                                tooltip="Move Left",
+                                on_click=lambda e, idx=i: self.move_image_left(idx),
+                                disabled=i == 0
+                            ),
+                            ft.IconButton(
+                                ft.Icons.ARROW_FORWARD,
+                                tooltip="Move Right", 
+                                on_click=lambda e, idx=i: self.move_image_right(idx),
+                                disabled=i == len(self.convert_images) - 1
+                            ),
+                            ft.IconButton(
+                                ft.Icons.DELETE,
+                                tooltip="Remove",
+                                on_click=lambda e, idx=i: self.remove_convert_image(idx)
+                            )
+                        ], alignment=ft.MainAxisAlignment.CENTER)
+                    ], alignment=ft.MainAxisAlignment.CENTER, horizontal_alignment=ft.CrossAxisAlignment.CENTER),
+                    bgcolor=ft.Colors.GREEN_50,
+                    border=ft.border.all(1, ft.Colors.GREEN_300),
+                    border_radius=10,
+                    padding=ft.padding.all(10),
+                    width=200
+                )
+                
+                self.convert_preview_row.controls.append(preview_container)
+                
+            except Exception as e:
+                print(f"Error creating preview for {file.name}: {e}")
+                
+        self.page.update()
+        
+    def move_image_left(self, index):
+        """Move image to the left (lower page number)"""
+        if index > 0:
+            self.convert_images[index], self.convert_images[index-1] = self.convert_images[index-1], self.convert_images[index]
+            self.update_convert_preview()
+            
+    def move_image_right(self, index):
+        """Move image to the right (higher page number)"""
+        if index < len(self.convert_images) - 1:
+            self.convert_images[index], self.convert_images[index+1] = self.convert_images[index+1], self.convert_images[index]
+            self.update_convert_preview()
+            
+    def remove_convert_image(self, index):
+        """Remove image from convert list"""
+        self.convert_images.pop(index)
+        self.update_convert_preview()
+        self.update_convert_status()
+        
+    def update_convert_status(self):
+        """Update status for convert tab"""
+        count = len(self.convert_images)
+        has_date = bool(self.convert_date.value and self.convert_date.value.strip())
+        has_class = bool(self.convert_class.value and self.convert_class.value.strip())
+        
+        if count == 0:
+            self.convert_status.value = "Drop 2 images to get started"
+            self.convert_status.color = ft.Colors.GREY_600
+            self.convert_btn.disabled = True
+        elif count == 1:
+            self.convert_status.value = "1 image selected - add 1 more"
+            self.convert_status.color = ft.Colors.ORANGE
+            self.convert_btn.disabled = True
+        elif not has_date or not has_class:
+            self.convert_status.value = f"{count} images selected - enter date and class number"
+            self.convert_status.color = ft.Colors.ORANGE
+            self.convert_btn.disabled = True
+        else:
+            self.convert_status.value = f"{count} images selected - ready to convert!"
+            self.convert_status.color = ft.Colors.GREEN
+            self.convert_btn.disabled = False
+            
+        self.page.update()
+        
+    def on_convert_community_changed(self, e):
+        """Handle community dropdown change in convert tab"""
+        self.update_convert_status()
+        
+    def on_convert_date_changed(self, e):
+        """Handle date field change in convert tab"""
+        self.update_convert_status()
+        
+    def on_convert_class_changed(self, e):
+        """Handle class field change in convert tab"""
+        self.update_convert_status()
+        
+    def browse_convert_output(self, e):
+        """Browse for output directory in convert tab"""
+        self.convert_dir_picker.get_directory_path()
+        
+    def on_convert_dir_picked(self, e: ft.FilePickerResultEvent):
+        """Handle directory picker for convert tab"""
+        if e.path:
+            self.convert_output_dir.value = e.path
             self.page.update()
+            
+    def convert_images_to_pdf(self, e):
+        """Convert images to PDF"""
+        print("Convert button clicked!")  # Debug
+        
+        if not self.convert_images:
+            self.show_error("Please select images first")
+            return
+            
+        if not self.convert_date.value or not self.convert_date.value.strip():
+            self.show_error("Please enter a date")
+            return
+            
+        if not self.convert_class.value or not self.convert_class.value.strip():
+            self.show_error("Please enter a class number")
+            return
+            
+        try:
+            date = self.convert_date.value.strip()
+            class_number = self.convert_class.value.strip()
+            community_name = self.convert_community.value or "unknown"
+            
+            output_filename = f"{date}_classreview_{community_name}_{class_number}.pdf"
+            output_path = Path(self.convert_output_dir.value) / output_filename
+            
+            self.convert_status.value = "Converting..."
+            self.convert_status.color = ft.Colors.BLUE
+            self.page.update()
+            
+            self.create_basic_pdf(output_path)
+            
+            # Add to processing log
+            success_msg = f"✓ PDF created: {output_filename}"
+            self.add_to_log(success_msg)
+            
+            self.convert_status.value = f"PDF created: {output_filename}"
+            self.convert_status.color = ft.Colors.GREEN
+            
+            self.show_success(f"PDF created successfully!\n\nFile saved to:\n{output_path}")
             
         except Exception as e:
-            self.show_error(f"Could not load image: {str(e)}")
-            
-    def select_output_dir(self, e):
-        """Handle output directory selection"""
-        self.dir_picker.get_directory_path(dialog_title="Select Output Directory")
-        
-    def on_dir_picker_result(self, e: ft.FilePickerResultEvent):
-        """Handle directory picker result"""
-        if e.path:
-            self.output_dir_field.value = e.path
-            self.page.update()
-            
-    def update_status(self):
-        """Update status text based on loaded images"""
-        loaded_images = sum(1 for img in self.image_files if img is not None)
-        
-        if loaded_images == 0:
-            self.status_text.value = "Select 2 images to get started"
-            self.status_text.color = ft.Colors.GREY_600
-            self.process_btn.disabled = True
-        elif loaded_images == 1:
-            self.status_text.value = "1 image selected - need 1 more"
-            self.status_text.color = ft.Colors.ORANGE
-            self.process_btn.disabled = True
-        elif loaded_images == 2:
-            self.status_text.value = "2 images selected - ready to process!"
-            self.status_text.color = ft.Colors.GREEN
-            self.process_btn.disabled = False
+            error_msg = f"✗ Failed to create PDF: {str(e)}"
+            self.add_to_log(error_msg)
+            self.convert_status.value = "Error occurred"
+            self.convert_status.color = ft.Colors.RED
+            self.show_error(f"Failed to create PDF: {str(e)}")
             
         self.page.update()
         
-    def reset_all(self, e):
-        """Reset all fields and images"""
-        self.image_files = [None, None]
+    def create_basic_pdf(self, output_path):
+        """Create basic PDF from images without community text"""
+        c = canvas.Canvas(str(output_path), pagesize=letter)
+        page_width, page_height = letter
         
-        for i, container in enumerate(self.image_containers):
-            placeholder = ft.Column([
-                ft.Icon(ft.Icons.IMAGE, size=50, color=ft.Colors.GREY_400),
-                ft.Text(f"Image {i + 1}", size=16, weight=ft.FontWeight.BOLD),
-                ft.Text("Click to select", size=12, color=ft.Colors.GREY_600)
-            ], alignment=ft.MainAxisAlignment.CENTER, horizontal_alignment=ft.CrossAxisAlignment.CENTER)
-            
-            container.content = placeholder
-            container.bgcolor = ft.Colors.GREY_100
-            container.border = ft.border.all(2, ft.Colors.GREY_300)
-            
-        self.date_field.value = ""
-        self.class_field.value = ""
-        self.community_dropdown.value = None
+        for i, img_file in enumerate(self.convert_images):
+            with Image.open(img_file.path) as img:
+                # Correct orientation
+                img = self.correct_image_orientation(img)
+                
+                if img.mode != 'RGB':
+                    img = img.convert('RGB')
+                    
+                img_width, img_height = img.size
+                
+                # Calculate scaling to fit page while maintaining aspect ratio
+                width_scale = page_width / img_width
+                height_scale = page_height / img_height
+                scale = min(width_scale, height_scale)
+                
+                final_img_width = img_width * scale
+                final_img_height = img_height * scale
+                
+                # Center the image
+                x_offset = (page_width - final_img_width) / 2
+                y_offset = (page_height - final_img_height) / 2
+                
+                # Save image to temporary file
+                with tempfile.NamedTemporaryFile(suffix='.jpg', delete=False) as temp_file:
+                    img.save(temp_file.name, 'JPEG', quality=95)
+                    temp_image_path = temp_file.name
+                    
+                try:
+                    c.drawImage(temp_image_path, x_offset, y_offset, 
+                              width=final_img_width, height=final_img_height)
+                finally:
+                    os.unlink(temp_image_path)
+                    
+                if i < len(self.convert_images) - 1:
+                    c.showPage()
+                    
+        c.save()
         
-        self.update_status()
+    def clear_convert(self, e):
+        """Clear all convert tab data"""
+        self.convert_images = []
+        self.convert_preview_row.controls.clear()
+        self.convert_date.value = ""
+        self.convert_class.value = ""
+        self.convert_community.value = None
+        self.update_convert_status()
+        
+    # Annotate Tab Methods
+    def browse_annotate_pdfs(self, e):
+        """Browse for PDFs to annotate"""
+        self.annotate_file_picker.pick_files(
+            dialog_title="Select PDFs to Annotate",
+            allowed_extensions=["pdf"],
+            allow_multiple=True
+        )
+        
+    def on_annotate_files_picked(self, e: ft.FilePickerResultEvent):
+        """Handle PDF file picker result"""
+        if e.files:
+            self.annotate_pdfs = e.files
+            self.update_annotate_list()
+            self.update_annotate_status()
+            
+    def update_annotate_list(self):
+        """Update the list of PDFs to annotate"""
+        self.annotate_pdf_list.controls.clear()
+        
+        for i, file in enumerate(self.annotate_pdfs):
+            pdf_item = ft.Container(
+                content=ft.Row([
+                    ft.Icon(ft.Icons.PICTURE_AS_PDF, color=ft.Colors.RED),
+                    ft.Text(file.name, expand=True),
+                    ft.IconButton(
+                        ft.Icons.DELETE,
+                        tooltip="Remove",
+                        on_click=lambda e, idx=i: self.remove_annotate_pdf(idx)
+                    )
+                ]),
+                bgcolor=ft.Colors.GREY_50,
+                border=ft.border.all(1, ft.Colors.GREY_300),
+                border_radius=5,
+                padding=ft.padding.all(10)
+            )
+            self.annotate_pdf_list.controls.append(pdf_item)
+            
+        self.page.update()
+        
+    def remove_annotate_pdf(self, index):
+        """Remove PDF from annotate list"""
+        self.annotate_pdfs.pop(index)
+        self.update_annotate_list()
+        self.update_annotate_status()
+        
+    def update_annotate_status(self):
+        """Update status for annotate tab"""
+        pdf_count = len(self.annotate_pdfs)
+        has_community = bool(self.annotate_community.value)
+        
+        if pdf_count == 0:
+            self.annotate_status.value = "Select PDFs and community to get started"
+            self.annotate_status.color = ft.Colors.GREY_600
+            self.annotate_btn.disabled = True
+        elif not has_community:
+            self.annotate_status.value = f"{pdf_count} PDFs selected - choose community"
+            self.annotate_status.color = ft.Colors.ORANGE
+            self.annotate_btn.disabled = True
+        else:
+            self.annotate_status.value = f"{pdf_count} PDFs ready to annotate"
+            self.annotate_status.color = ft.Colors.GREEN
+            self.annotate_btn.disabled = False
+            
+        self.page.update()
+        
+    def on_annotate_community_changed(self, e):
+        """Handle community dropdown change in annotate tab"""
+        self.update_annotate_status()
+        
+    def browse_annotate_output(self, e):
+        """Browse for output directory in annotate tab"""
+        self.annotate_dir_picker.get_directory_path()
+        
+    def on_annotate_dir_picked(self, e: ft.FilePickerResultEvent):
+        """Handle directory picker for annotate tab"""
+        if e.path:
+            self.annotate_output_dir.value = e.path
+            self.page.update()
+            
+    def annotate_pdfs_action(self, e):
+        """Add community information to existing PDFs"""
+        print("Annotate button clicked!")  # Debug
+        
+        if not self.annotate_pdfs:
+            self.show_error("Please select PDFs first")
+            return
+            
+        if not self.annotate_community.value:
+            self.show_error("Please select a community")
+            return
+            
+        try:
+            community_name = self.annotate_community.value
+            community_text = self.community_data.get(community_name, f"No data for {community_name}")
+            
+            self.annotate_status.value = "Annotating PDFs..."
+            self.annotate_status.color = ft.Colors.BLUE
+            self.page.update()
+            
+            success_count = 0
+            for pdf_file in self.annotate_pdfs:
+                try:
+                    # Create output filename
+                    original_name = Path(pdf_file.name).stem
+                    output_filename = f"{original_name}_annotated_{community_name}.pdf"
+                    output_path = Path(self.annotate_output_dir.value) / output_filename
+                    
+                    # Add community text to PDF
+                    self.add_text_to_pdf(pdf_file.path, output_path, community_text)
+                    success_count += 1
+                    
+                    # Add to log
+                    log_msg = f"✓ Annotated: {output_filename}"
+                    self.add_to_log(log_msg)
+                    
+                except Exception as e:
+                    error_msg = f"✗ Failed to annotate {pdf_file.name}: {str(e)}"
+                    self.add_to_log(error_msg)
+                    print(f"Error annotating {pdf_file.name}: {e}")
+                    
+            self.annotate_status.value = f"Annotated {success_count}/{len(self.annotate_pdfs)} PDFs"
+            self.annotate_status.color = ft.Colors.GREEN
+            
+            self.show_success(f"Successfully annotated {success_count} PDFs!\n\nFiles saved to:\n{self.annotate_output_dir.value}")
+            
+        except Exception as e:
+            error_msg = f"✗ Failed to annotate PDFs: {str(e)}"
+            self.add_to_log(error_msg)
+            self.annotate_status.value = "Error occurred"
+            self.annotate_status.color = ft.Colors.RED
+            self.show_error(f"Failed to annotate PDFs: {str(e)}")
+            
+        self.page.update()
+        
+    def add_text_to_pdf(self, input_pdf_path, output_pdf_path, community_text):
+        """Add community text overlay to existing PDF"""
+        from reportlab.pdfgen import canvas
+        from reportlab.lib.pagesizes import letter
+        from PyPDF2 import PdfReader, PdfWriter
+        import io
+        
+        # Read the existing PDF
+        reader = PdfReader(input_pdf_path)
+        writer = PdfWriter()
+        
+        page_width, page_height = letter
+        text_area_height = 100
+        
+        for page_num, page in enumerate(reader.pages):
+            # Create overlay with text
+            packet = io.BytesIO()
+            overlay_canvas = canvas.Canvas(packet, pagesize=letter)
+            
+            # Add white background for text area at top
+            overlay_canvas.setFillColor(white)
+            overlay_canvas.rect(0, page_height - text_area_height, page_width, text_area_height, fill=1, stroke=0)
+            
+            # Add community text
+            overlay_canvas.setFillColor(black)
+            overlay_canvas.setFont("Helvetica", 12)
+            
+            lines = self.wrap_text(community_text, page_width - 20, overlay_canvas)
+            y_pos = page_height - 20
+            for line in lines:
+                if line == "":  # Empty line for paragraph breaks
+                    y_pos -= 8
+                else:
+                    overlay_canvas.drawString(10, y_pos, line)
+                    y_pos -= 15
+                    
+            # Page indicator
+            overlay_canvas.setFont("Helvetica", 8)
+            overlay_canvas.drawString(page_width - 80, page_height - 15, f"Page {page_num+1} of {len(reader.pages)}")
+            
+            overlay_canvas.save()
+            
+            # Move to the beginning of the StringIO buffer
+            packet.seek(0)
+            overlay_pdf = PdfReader(packet)
+            
+            # Merge the overlay with the existing page
+            page.merge_page(overlay_pdf.pages[0])
+            writer.add_page(page)
+            
+        # Write the result
+        with open(output_pdf_path, 'wb') as output_file:
+            writer.write(output_file)
+            
+    def clear_annotate(self, e):
+        """Clear all annotate tab data"""
+        self.annotate_pdfs = []
+        self.annotate_pdf_list.controls.clear()
+        self.annotate_community.value = None
+        self.update_annotate_status()
+        
+    # Community Management Methods
+    def refresh_community_dropdown(self):
+        """Refresh all community dropdown options"""
+        # Update convert tab dropdown
+        self.convert_community.options = [
+            ft.dropdown.Option(key) for key in sorted(self.community_data.keys())
+        ]
+        
+        # Update annotate tab dropdown
+        self.annotate_community.options = [
+            ft.dropdown.Option(key) for key in sorted(self.community_data.keys())
+        ]
+        
+        # Update communities tab dropdowns if they exist
+        if hasattr(self, 'edit_community_dropdown'):
+            self.edit_community_dropdown.options = [
+                ft.dropdown.Option(key) for key in sorted(self.community_data.keys())
+            ]
+            
+        if hasattr(self, 'delete_community_dropdown'):
+            self.delete_community_dropdown.options = [
+                ft.dropdown.Option(key) for key in sorted(self.community_data.keys())
+            ]
+            
+        # Update status
+        if hasattr(self, 'communities_status'):
+            self.communities_status.value = f"Total communities: {len(self.community_data)}"
+            
+        self.page.update()
+        
+    def add_community_tab(self, e):
+        """Add community from the communities tab"""
+        name = self.new_community_name.value.strip()
+        description = self.new_community_desc.value.strip()
+        
+        if not name:
+            self.show_communities_status("Error: Community name is required", ft.Colors.RED)
+            return
+            
+        if not description:
+            self.show_communities_status("Error: Description is required", ft.Colors.RED)
+            return
+            
+        if name in self.community_data:
+            self.show_communities_status(f"Error: Community '{name}' already exists", ft.Colors.RED)
+            return
+            
+        # Add the community
+        self.community_data[name] = description
+        self.save_communities()
+        self.refresh_community_dropdown()
+        
+        # Clear the form
+        self.new_community_name.value = ""
+        self.new_community_desc.value = ""
+        
+        self.show_communities_status(f"Added community '{name}' successfully", ft.Colors.GREEN)
         
     def clear_log(self, e):
         """Clear the processing log"""
@@ -779,132 +1083,64 @@ class ImageToPDFApp:
             log_content = "Processing Log:\n" + "\n".join(self.processing_log)
             self.log_text.value = log_content
         
-        self.log_container_content.update()
+        if hasattr(self, 'log_container_content'):
+            self.log_container_content.update()
         self.page.update()
         
-    def validate_inputs(self):
-        """Validate user inputs"""
-        if not self.date_field.value or not self.date_field.value.strip():
-            self.show_error("Please enter a date")
-            return False
+    def on_edit_community_selected(self, e):
+        """Handle community selection for editing"""
+        if e.control.value:
+            selected_key = e.control.value
+            self.edit_community_desc.value = self.community_data.get(selected_key, "")
+            self.edit_community_desc.disabled = False
+            self.edit_button.disabled = False
+            self.page.update()
             
-        if not self.class_field.value or not self.class_field.value.strip():
-            self.show_error("Please enter a class number")
-            return False
-            
-        if not self.community_dropdown.value:
-            self.show_error("Please select a community")
-            return False
-            
-        valid_images = [img for img in self.image_files if img is not None]
-        if len(valid_images) < 2:
-            self.show_error("Please select 2 images")
-            return False
-            
-        return True
+    def update_community_tab(self, e):
+        """Update community from the communities tab"""
+        selected_key = self.edit_community_dropdown.value
+        new_description = self.edit_community_desc.value.strip()
         
-    def process_images(self, e):
-        """Process images and create PDF"""
-        if not self.validate_inputs():
+        if not selected_key:
+            self.show_communities_status("Error: Please select a community to edit", ft.Colors.RED)
             return
             
-        try:
-            date = self.date_field.value.strip()
-            class_number = self.class_field.value.strip()
-            community_name = self.community_dropdown.value
-            community_text = self.community_data.get(community_name, f"No data for {community_name}")
+        if not new_description:
+            self.show_communities_status("Error: Description is required", ft.Colors.RED)
+            return
             
-            output_filename = f"{date}_classreview_{community_name}_{class_number}.pdf"
-            output_path = Path(self.output_dir_field.value) / output_filename
-            
-            self.status_text.value = "Processing..."
-            self.status_text.color = ft.Colors.BLUE
-            self.page.update()
-            
-            self.create_pdf(output_path, community_text, date, class_number, community_name)
-            
-            success_msg = f"✓ PDF created: {output_filename}"
-            self.add_to_log(success_msg)
-            
-            self.status_text.value = f"PDF created: {output_filename}"
-            self.status_text.color = ft.Colors.GREEN
-            self.page.update()
-            
-            self.show_success(f"PDF created successfully!\n\nFile saved to:\n{output_path}")
-            
-        except Exception as e:
-            error_msg = f"✗ Failed to create PDF: {str(e)}"
-            self.add_to_log(error_msg)
-            self.status_text.value = "Error occurred"
-            self.status_text.color = ft.Colors.RED
-            self.page.update()
-            self.show_error(f"Failed to create PDF: {str(e)}")
-            
-    def create_pdf(self, output_path, community_text, date, class_number, community_name):
-        """Create PDF from images"""
-        valid_images = [img for img in self.image_files if img is not None]
+        # Update the community
+        self.community_data[selected_key] = new_description
+        self.save_communities()
+        self.refresh_community_dropdown()
         
-        if not valid_images:
-            raise ValueError("No valid images to process")
+        self.show_communities_status(f"Updated community '{selected_key}' successfully", ft.Colors.GREEN)
         
-        c = canvas.Canvas(str(output_path), pagesize=letter)
-        page_width, page_height = letter
-        text_area_height = 100
-        available_image_height = page_height - text_area_height
+    def delete_community_tab(self, e):
+        """Delete community from the communities tab"""
+        selected_key = self.delete_community_dropdown.value
         
-        for i, img_file in enumerate(valid_images):
-            with Image.open(img_file.path) as img:
-                if img.mode != 'RGB':
-                    img = img.convert('RGB')
-                    
-                img_width, img_height = img.size
-                
-                width_scale = (page_width - 40) / img_width
-                height_scale = available_image_height / img_height
-                scale = min(width_scale, height_scale)
-                
-                final_img_width = img_width * scale
-                final_img_height = img_height * scale
-                
-                x_offset = (page_width - final_img_width) / 2
-                y_offset = 0
-                
-                # Add white background for text area at top
-                c.setFillColor(white)
-                c.rect(0, page_height - text_area_height, page_width, text_area_height, fill=1, stroke=0)
-                
-                # Add community text only
-                c.setFillColor(black)
-                c.setFont("Helvetica", 12)
-                
-                lines = self.wrap_text(community_text, page_width - 20, c)
-                y_pos = page_height - 20
-                for line in lines:
-                    if line == "":  # Empty line for paragraph breaks
-                        y_pos -= 8  # Smaller space for empty lines
-                    else:
-                        c.drawString(10, y_pos, line)
-                        y_pos -= 15  # Normal line spacing
-                    
-                # Page indicator
-                c.setFont("Helvetica", 8)
-                c.drawString(page_width - 80, page_height - 15, f"Page {i+1} of {len(valid_images)}")
-                
-                with tempfile.NamedTemporaryFile(suffix='.jpg', delete=False) as temp_file:
-                    img.save(temp_file.name, 'JPEG', quality=95)
-                    temp_image_path = temp_file.name
-                    
-                try:
-                    c.drawImage(temp_image_path, x_offset, y_offset, 
-                              width=final_img_width, height=final_img_height)
-                finally:
-                    os.unlink(temp_image_path)
-                    
-                if i < len(valid_images) - 1:
-                    c.showPage()
-                    
-        c.save()
+        if not selected_key:
+            self.show_communities_status("Error: Please select a community to delete", ft.Colors.RED)
+            return
+            
+        # Delete the community
+        del self.community_data[selected_key]
+        self.save_communities()
+        self.refresh_community_dropdown()
         
+        # Clear the dropdown
+        self.delete_community_dropdown.value = None
+        
+        self.show_communities_status(f"Deleted community '{selected_key}' successfully", ft.Colors.GREEN)
+        
+    def show_communities_status(self, message, color):
+        """Show status message in communities tab"""
+        self.communities_status.value = message
+        self.communities_status.color = color
+        self.page.update()
+        
+    # Utility Methods
     def wrap_text(self, text, max_width, canvas_obj):
         """Wrap text to fit within specified width, honoring line breaks"""
         # First split by actual line breaks
