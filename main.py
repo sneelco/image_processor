@@ -549,6 +549,7 @@ class ImageToPDFApp:
         
         # Use tkinter directly for Linux builds as Flet FilePicker has issues
         import platform
+        import os
         if platform.system() == "Linux":
             print("DEBUG: Using tkinter fallback for Linux")
             import tkinter as tk
@@ -564,9 +565,13 @@ class ImageToPDFApp:
             root.destroy()
             if files:
                 print(f"DEBUG: Tkinter selected {len(files)} files")
-                # Convert to Flet file objects
-                from flet import FilePickerFile
-                file_objects = [FilePickerFile(path=f) for f in files]
+                # Convert to Flet file objects - create a simple object that mimics FilePickerFile
+                class MockFilePickerFile:
+                    def __init__(self, path):
+                        self.path = path
+                        self.name = os.path.basename(path)
+                
+                file_objects = [MockFilePickerFile(f) for f in files]
                 self.on_convert_files_picked(type('obj', (object,), {'files': file_objects})())
         else:
             # Use Flet FilePicker for Windows and macOS
@@ -870,9 +875,15 @@ class ImageToPDFApp:
             )
             root.destroy()
             if files:
-                # Convert to Flet file objects
-                from flet import FilePickerFile
-                file_objects = [FilePickerFile(path=f) for f in files]
+                print(f"DEBUG: Tkinter selected {len(files)} PDF files")
+                # Convert to Flet file objects - create a simple object that mimics FilePickerFile
+                import os
+                class MockFilePickerFile:
+                    def __init__(self, path):
+                        self.path = path
+                        self.name = os.path.basename(path)
+                
+                file_objects = [MockFilePickerFile(f) for f in files]
                 self.on_annotate_files_picked(type('obj', (object,), {'files': file_objects})())
         
     def on_annotate_files_picked(self, e: ft.FilePickerResultEvent):
