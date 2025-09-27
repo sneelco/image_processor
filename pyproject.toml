@@ -1,0 +1,13 @@
+[project]
+name = "leading-age"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "flet[all]>=0.28.3",
+    "pillow>=11.3.0",
+    "pyinstaller>=6.16.0",
+    "reportlab>=4.4.4",
+    "tkinterdnd2>=0.4.3",
+]
