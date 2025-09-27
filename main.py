@@ -20,7 +20,6 @@ import tempfile
 import os
 from pathlib import Path
 import base64
-from datetime import datetime
 import yaml
 import io
 
@@ -47,8 +46,6 @@ class ImageToPDFApp:
         self.annotate_pdfs = []  # List of PDF files
         self.annotate_drop_area = None
         
-        # Processing log
-        self.processing_log = []
         
         # Setup UI
         self.setup_ui()
@@ -135,18 +132,18 @@ class ImageToPDFApp:
         """Create the convert tab - drag images to create basic PDFs"""
         # Instructions
         instructions = ft.Text(
-            "Drag and drop 2 images to create a PDF (no community text added)",
+            "Click to select 2 images to create a PDF (no community text added)",
             size=16,
             text_align=ft.TextAlign.CENTER,
             color=ft.Colors.BLUE_GREY_600
         )
         
-        # Drag and drop area
+        # Image selection area
         self.convert_drop_area = ft.Container(
             content=ft.Column([
                 ft.Icon(ft.Icons.CLOUD_UPLOAD, size=64, color=ft.Colors.BLUE_300),
-                ft.Text("Drop Images Here", size=20, weight=ft.FontWeight.BOLD),
-                ft.Text("or click to browse", size=14, color=ft.Colors.GREY_600),
+                ft.Text("Click to Select Images", size=20, weight=ft.FontWeight.BOLD),
+                ft.Text("Select up to 2 images at once", size=14, color=ft.Colors.BLUE_600),
                 ft.Text("Supports: JPG, PNG, BMP, TIFF, GIF", size=12, color=ft.Colors.GREY_500)
             ], alignment=ft.MainAxisAlignment.CENTER, horizontal_alignment=ft.CrossAxisAlignment.CENTER),
             width=600,
@@ -155,11 +152,15 @@ class ImageToPDFApp:
             border=ft.border.all(2, ft.Colors.BLUE_200),
             border_radius=10,
             alignment=ft.alignment.center,
-            on_click=self.browse_convert_images
+            on_click=self.browse_convert_images,
+            on_hover=self.on_convert_area_hover
         )
         
         # Image preview area
         self.convert_preview_row = ft.Row([], alignment=ft.MainAxisAlignment.CENTER, spacing=20)
+        
+        # Initialize the preview row with the drop area
+        self.update_convert_preview()
         
         # Convert form
         self.convert_date = ft.TextField(
@@ -187,10 +188,15 @@ class ImageToPDFApp:
             self.convert_community
         ], spacing=20, alignment=ft.MainAxisAlignment.CENTER)
         
-        # Output directory
+        # Output directory - use Documents folder if it exists, otherwise home directory
+        documents_path = Path.home() / "Documents"
+        if documents_path.exists():
+            default_output_dir = str(documents_path)
+        else:
+            default_output_dir = str(Path.home())
         self.convert_output_dir = ft.TextField(
             label="Output Directory",
-            value=str(Path.cwd()),
+            value=default_output_dir,
             width=400,
             read_only=True
         )
@@ -237,10 +243,11 @@ class ImageToPDFApp:
         
         return ft.Column([
             ft.Container(instructions, padding=ft.padding.all(20)),
-            ft.Container(self.convert_drop_area, alignment=ft.alignment.center),
-            ft.Container(height=20),  # Spacer
-            self.convert_preview_row,
-            ft.Container(height=20),  # Spacer
+            ft.Container(
+                content=self.convert_preview_row,
+                alignment=ft.alignment.center,
+                padding=ft.padding.all(20)
+            ),
             ft.Container(
                 ft.Column([
                     ft.Text("PDF Details", size=16, weight=ft.FontWeight.BOLD, text_align=ft.TextAlign.CENTER),
@@ -267,8 +274,8 @@ class ImageToPDFApp:
             color=ft.Colors.PURPLE_600
         )
         
-        # PDF selection
-        self.annotate_pdf_list = ft.Column([], spacing=10)
+        # PDF selection - scrollable with limited height
+        self.annotate_pdf_list = ft.Column([], spacing=10, scroll=ft.ScrollMode.AUTO)
         
         pdf_section = ft.Container(
             content=ft.Column([
@@ -279,7 +286,13 @@ class ImageToPDFApp:
                     style=ft.ButtonStyle(bgcolor=ft.Colors.PURPLE, color=ft.Colors.WHITE),
                     width=150
                 ),
-                self.annotate_pdf_list
+                ft.Container(
+                    content=self.annotate_pdf_list,
+                    height=200,  # Limit height to 200px
+                    border=ft.border.all(1, ft.Colors.GREY_300),
+                    border_radius=5,
+                    padding=ft.padding.all(10)
+                )
             ], spacing=10),
             padding=ft.padding.all(20),
             bgcolor=ft.Colors.PURPLE_50,
@@ -295,10 +308,15 @@ class ImageToPDFApp:
             on_change=self.on_annotate_community_changed
         )
         
-        # Output directory
+        # Output directory - use Documents folder if it exists, otherwise home directory
+        documents_path = Path.home() / "Documents"
+        if documents_path.exists():
+            default_output_dir = str(documents_path)
+        else:
+            default_output_dir = str(Path.home())
         self.annotate_output_dir = ft.TextField(
             label="Output Directory",
-            value=str(Path.cwd()),
+            value=default_output_dir,
             width=400,
             read_only=True
         )
@@ -496,54 +514,9 @@ class ImageToPDFApp:
             edit_section,
             ft.Container(height=20),  # Spacer
             delete_section,
-            ft.Container(self.communities_status, padding=ft.padding.all(20)),
-            ft.Container(height=20),
-            self.create_log_section()
+            ft.Container(self.communities_status, padding=ft.padding.all(20))
         ], scroll=ft.ScrollMode.AUTO)
         
-    def create_log_section(self):
-        """Create the processing log section"""
-        self.log_text = ft.Text(
-            value="Processing Log:\n(No files processed yet)",
-            size=11,
-            color=ft.Colors.GREY_700,
-            selectable=True
-        )
-        
-        self.log_container_content = ft.Container(
-            content=self.log_text,
-            bgcolor=ft.Colors.GREY_50,
-            border=ft.border.all(1, ft.Colors.GREY_300),
-            border_radius=5,
-            padding=ft.padding.all(10),
-            height=150,
-            width=None
-        )
-        
-        clear_log_btn = ft.ElevatedButton(
-            text="Clear Log",
-            on_click=self.clear_log,
-            style=ft.ButtonStyle(
-                bgcolor=ft.Colors.GREY,
-                color=ft.Colors.WHITE
-            ),
-            width=100
-        )
-        
-        return ft.Container(
-            content=ft.Column([
-                ft.Text("Processing History", size=16, weight=ft.FontWeight.BOLD),
-                self.log_container_content,
-                ft.Container(
-                    clear_log_btn,
-                    alignment=ft.alignment.center,
-                    padding=ft.padding.only(top=10)
-                )
-            ]),
-            padding=ft.padding.all(20),
-            bgcolor=ft.Colors.BLUE_GREY_50,
-            border_radius=10
-        )
         
     def correct_image_orientation(self, image):
         """Correct image orientation based on EXIF data"""
@@ -585,58 +558,100 @@ class ImageToPDFApp:
             self.update_convert_preview()
             self.update_convert_status()
             
+    def on_convert_area_hover(self, e):
+        """Handle hover effect on convert area"""
+        if e.data == "true":  # Mouse enter
+            self.convert_drop_area.bgcolor = ft.Colors.BLUE_100
+            self.convert_drop_area.border = ft.border.all(3, ft.Colors.BLUE_400)
+        else:  # Mouse leave
+            self.convert_drop_area.bgcolor = ft.Colors.BLUE_50
+            self.convert_drop_area.border = ft.border.all(2, ft.Colors.BLUE_200)
+        self.page.update()
+            
     def update_convert_preview(self):
         """Update the preview of selected images"""
         self.convert_preview_row.controls.clear()
         
-        for i, file in enumerate(self.convert_images):
-            try:
-                with open(file.path, 'rb') as f:
-                    image_data = f.read()
-                image_base64 = base64.b64encode(image_data).decode()
-                
-                # Create preview with reorder buttons
-                preview_container = ft.Container(
-                    content=ft.Column([
-                        ft.Text(f"Page {i+1}", size=12, weight=ft.FontWeight.BOLD),
-                        ft.Image(
-                            src_base64=image_base64,
-                            width=150,
-                            height=150,
-                            fit=ft.ImageFit.CONTAIN
-                        ),
-                        ft.Text(file.name, size=10, max_lines=2, text_align=ft.TextAlign.CENTER),
-                        ft.Row([
-                            ft.IconButton(
-                                ft.Icons.ARROW_BACK,
-                                tooltip="Move Left",
-                                on_click=lambda e, idx=i: self.move_image_left(idx),
-                                disabled=i == 0
+        if self.convert_images:
+            # Show image previews plus "Add More" button
+            for i, file in enumerate(self.convert_images):
+                try:
+                    with open(file.path, 'rb') as f:
+                        image_data = f.read()
+                    image_base64 = base64.b64encode(image_data).decode()
+                    
+                    # Create preview with reorder buttons
+                    preview_container = ft.Container(
+                        content=ft.Column([
+                            ft.Text(f"Page {i+1}", size=12, weight=ft.FontWeight.BOLD),
+                            ft.Image(
+                                src_base64=image_base64,
+                                width=150,
+                                height=150,
+                                fit=ft.ImageFit.CONTAIN
                             ),
-                            ft.IconButton(
-                                ft.Icons.ARROW_FORWARD,
-                                tooltip="Move Right", 
-                                on_click=lambda e, idx=i: self.move_image_right(idx),
-                                disabled=i == len(self.convert_images) - 1
-                            ),
-                            ft.IconButton(
-                                ft.Icons.DELETE,
-                                tooltip="Remove",
-                                on_click=lambda e, idx=i: self.remove_convert_image(idx)
-                            )
-                        ], alignment=ft.MainAxisAlignment.CENTER)
-                    ], alignment=ft.MainAxisAlignment.CENTER, horizontal_alignment=ft.CrossAxisAlignment.CENTER),
-                    bgcolor=ft.Colors.GREEN_50,
-                    border=ft.border.all(1, ft.Colors.GREEN_300),
-                    border_radius=10,
-                    padding=ft.padding.all(10),
-                    width=200
-                )
-                
-                self.convert_preview_row.controls.append(preview_container)
-                
-            except Exception as e:
-                print(f"Error creating preview for {file.name}: {e}")
+                            ft.Text(file.name, size=10, max_lines=2, text_align=ft.TextAlign.CENTER),
+                            ft.Row([
+                                ft.IconButton(
+                                    ft.Icons.ARROW_BACK,
+                                    tooltip="Move Left",
+                                    on_click=lambda e, idx=i: self.move_image_left(idx),
+                                    disabled=i == 0
+                                ),
+                                ft.IconButton(
+                                    ft.Icons.ARROW_FORWARD,
+                                    tooltip="Move Right", 
+                                    on_click=lambda e, idx=i: self.move_image_right(idx),
+                                    disabled=i == len(self.convert_images) - 1
+                                ),
+                                ft.IconButton(
+                                    ft.Icons.DELETE,
+                                    tooltip="Remove",
+                                    on_click=lambda e, idx=i: self.remove_convert_image(idx)
+                                )
+                            ], alignment=ft.MainAxisAlignment.CENTER)
+                        ], alignment=ft.MainAxisAlignment.CENTER, horizontal_alignment=ft.CrossAxisAlignment.CENTER),
+                        bgcolor=ft.Colors.GREEN_50,
+                        border=ft.border.all(1, ft.Colors.GREEN_300),
+                        border_radius=10,
+                        padding=ft.padding.all(10),
+                        width=200
+                    )
+                    
+                    self.convert_preview_row.controls.append(preview_container)
+                    
+                except Exception as e:
+                    print(f"Error creating preview for {file.name}: {e}")
+            
+            # Add "Add More" button inline with images
+            add_more_button = ft.Container(
+                content=ft.Column([
+                    ft.Icon(ft.Icons.ADD_PHOTO_ALTERNATE, size=32, color=ft.Colors.BLUE_300),
+                    ft.Text("Add More", size=14, weight=ft.FontWeight.BOLD),
+                    ft.Text("Click to select", size=10, color=ft.Colors.GREY_600)
+                ], alignment=ft.MainAxisAlignment.CENTER, horizontal_alignment=ft.CrossAxisAlignment.CENTER),
+                width=200,
+                height=150,
+                bgcolor=ft.Colors.BLUE_50,
+                border=ft.border.all(2, ft.Colors.BLUE_200),
+                border_radius=10,
+                alignment=ft.alignment.center,
+                on_click=self.browse_convert_images,
+                on_hover=self.on_convert_area_hover
+            )
+            self.convert_preview_row.controls.append(add_more_button)
+            
+        else:
+            # Show full-size drop area when no images selected
+            self.convert_drop_area.width = 600
+            self.convert_drop_area.height = 200
+            self.convert_drop_area.content = ft.Column([
+                ft.Icon(ft.Icons.CLOUD_UPLOAD, size=64, color=ft.Colors.BLUE_300),
+                ft.Text("Click to Select Images", size=20, weight=ft.FontWeight.BOLD),
+                ft.Text("Select up to 2 images at once", size=14, color=ft.Colors.BLUE_600),
+                ft.Text("Supports: JPG, PNG, BMP, TIFF, GIF", size=12, color=ft.Colors.GREY_500)
+            ], alignment=ft.MainAxisAlignment.CENTER, horizontal_alignment=ft.CrossAxisAlignment.CENTER)
+            self.convert_preview_row.controls.append(self.convert_drop_area)
                 
         self.page.update()
         
@@ -735,9 +750,6 @@ class ImageToPDFApp:
             
             self.create_basic_pdf(output_path)
             
-            # Add to processing log
-            success_msg = f"✓ PDF created: {output_filename}"
-            self.add_to_log(success_msg)
             
             self.convert_status.value = f"PDF created: {output_filename}"
             self.convert_status.color = ft.Colors.GREEN
@@ -745,8 +757,6 @@ class ImageToPDFApp:
             self.show_success(f"PDF created successfully!\n\nFile saved to:\n{output_path}")
             
         except Exception as e:
-            error_msg = f"✗ Failed to create PDF: {str(e)}"
-            self.add_to_log(error_msg)
             self.convert_status.value = "Error occurred"
             self.convert_status.color = ft.Colors.RED
             self.show_error(f"Failed to create PDF: {str(e)}")
@@ -803,6 +813,7 @@ class ImageToPDFApp:
         self.convert_date.value = ""
         self.convert_class.value = ""
         self.convert_community.value = None
+        self.update_convert_preview()  # This will reset the drop area to full size
         self.update_convert_status()
         
     # Annotate Tab Methods
@@ -908,22 +919,16 @@ class ImageToPDFApp:
             success_count = 0
             for pdf_file in self.annotate_pdfs:
                 try:
-                    # Create output filename
-                    original_name = Path(pdf_file.name).stem
-                    output_filename = f"{original_name}_annotated_{community_name}.pdf"
+                    # Keep original filename
+                    output_filename = pdf_file.name
                     output_path = Path(self.annotate_output_dir.value) / output_filename
                     
                     # Add community text to PDF
                     self.add_text_to_pdf(pdf_file.path, output_path, community_text)
                     success_count += 1
                     
-                    # Add to log
-                    log_msg = f"✓ Annotated: {output_filename}"
-                    self.add_to_log(log_msg)
                     
                 except Exception as e:
-                    error_msg = f"✗ Failed to annotate {pdf_file.name}: {str(e)}"
-                    self.add_to_log(error_msg)
                     print(f"Error annotating {pdf_file.name}: {e}")
                     
             self.annotate_status.value = f"Annotated {success_count}/{len(self.annotate_pdfs)} PDFs"
@@ -932,8 +937,6 @@ class ImageToPDFApp:
             self.show_success(f"Successfully annotated {success_count} PDFs!\n\nFiles saved to:\n{self.annotate_output_dir.value}")
             
         except Exception as e:
-            error_msg = f"✗ Failed to annotate PDFs: {str(e)}"
-            self.add_to_log(error_msg)
             self.annotate_status.value = "Error occurred"
             self.annotate_status.color = ft.Colors.RED
             self.show_error(f"Failed to annotate PDFs: {str(e)}")
@@ -1059,33 +1062,6 @@ class ImageToPDFApp:
         
         self.show_communities_status(f"Added community '{name}' successfully", ft.Colors.GREEN)
         
-    def clear_log(self, e):
-        """Clear the processing log"""
-        self.processing_log = []
-        self.update_log_display()
-        
-    def add_to_log(self, message):
-        """Add a message to the processing log"""
-        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        log_entry = f"[{timestamp}] {message}"
-        self.processing_log.insert(0, log_entry)
-        
-        if len(self.processing_log) > 10:
-            self.processing_log = self.processing_log[:10]
-            
-        self.update_log_display()
-        
-    def update_log_display(self):
-        """Update the log display text"""
-        if not self.processing_log:
-            self.log_text.value = "Processing Log:\n(No files processed yet)"
-        else:
-            log_content = "Processing Log:\n" + "\n".join(self.processing_log)
-            self.log_text.value = log_content
-        
-        if hasattr(self, 'log_container_content'):
-            self.log_container_content.update()
-        self.page.update()
         
     def on_edit_community_selected(self, e):
         """Handle community selection for editing"""
