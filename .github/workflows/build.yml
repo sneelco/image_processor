@@ -49,7 +49,7 @@ jobs:
     
     - name: Build executable
       run: |
-        uv run pyinstaller ImageToPDFProcessor.spec
+        uv run pyinstaller --onefile --windowed --name "ImageToPDFProcessor" --hidden-import tkinter --hidden-import tkinter.filedialog --hidden-import flet --hidden-import PIL --hidden-import reportlab --hidden-import PyPDF2 --hidden-import yaml main.py
     
     - name: Rename executable (Windows)
       if: matrix.os == 'windows-latest'
