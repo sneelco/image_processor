@@ -105,6 +105,6 @@ jobs:
           ./artifacts/ImageToPDFProcessor-linux/ImageToPDFProcessor-linux
           ./artifacts/ImageToPDFProcessor-macos/ImageToPDFProcessor-macos
         draft: false
-        prerelease: false
+        prerelease: true
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
