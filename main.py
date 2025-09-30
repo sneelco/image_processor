@@ -551,21 +551,62 @@ class ImageToPDFApp:
         import platform
         import os
         if platform.system() == "Linux":
-            print("DEBUG: Using tkinter fallback for Linux")
-            import tkinter as tk
-            from tkinter import filedialog
-            root = tk.Tk()
-            root.withdraw()  # Hide the main window
-            root.lift()  # Bring to front
-            root.attributes('-topmost', True)  # Force on top
-            files = filedialog.askopenfilenames(
-                title="Select Images",
-                filetypes=[("Image files", "*.jpg *.jpeg *.png *.bmp *.tiff *.gif")]
-            )
-            root.destroy()
+            print("DEBUG: Using native file picker for Linux")
+            try:
+                # Try zenity first (most reliable on Linux)
+                import subprocess
+                result = subprocess.run(['zenity', '--file-selection', '--multiple', '--file-filter=Image files|*.jpg *.jpeg *.png *.bmp *.tiff *.gif'], 
+                                      capture_output=True, text=True)
+                if result.returncode == 0:
+                    files = result.stdout.strip().split('|')
+                    if files and files[0]:
+                        print(f"DEBUG: Zenity selected {len(files)} files")
+                        class MockFilePickerFile:
+                            def __init__(self, path):
+                                self.path = path
+                                self.name = os.path.basename(path)
+                        
+                        file_objects = [MockFilePickerFile(f) for f in files]
+                        self.on_convert_files_picked(type('obj', (object,), {'files': file_objects})())
+                        return
+                        
+            except Exception as zenity_ex:
+                print(f"DEBUG: Zenity failed: {zenity_ex}")
+                
+            try:
+                # Try kdialog as fallback
+                result = subprocess.run(['kdialog', '--getopenfilename', '/home', 'Image files (*.jpg *.jpeg *.png *.bmp *.tiff *.gif)'], 
+                                      capture_output=True, text=True)
+                if result.returncode == 0 and result.stdout.strip():
+                    files = [result.stdout.strip()]
+                    print(f"DEBUG: KDialog selected {len(files)} files")
+                    class MockFilePickerFile:
+                        def __init__(self, path):
+                            self.path = path
+                            self.name = os.path.basename(path)
+                    
+                    file_objects = [MockFilePickerFile(f) for f in files]
+                    self.on_convert_files_picked(type('obj', (object,), {'files': file_objects})())
+                    return
+                    
+            except Exception as kdialog_ex:
+                print(f"DEBUG: KDialog failed: {kdialog_ex}")
+                
+            # If all GUI methods fail, show a simple text input
+            self.show_error("No file picker available. Please enter file paths manually in the console.")
+            print("Please enter the full path to your image files (one per line, empty line to finish):")
+            files = []
+            while True:
+                file_path = input("File path: ").strip()
+                if not file_path:
+                    break
+                if os.path.exists(file_path):
+                    files.append(file_path)
+                else:
+                    print(f"File not found: {file_path}")
+            
             if files:
-                print(f"DEBUG: Tkinter selected {len(files)} files")
-                # Convert to Flet file objects - create a simple object that mimics FilePickerFile
+                print(f"DEBUG: Manual input selected {len(files)} files")
                 class MockFilePickerFile:
                     def __init__(self, path):
                         self.path = path
@@ -860,21 +901,62 @@ class ImageToPDFApp:
         import platform
         import os
         if platform.system() == "Linux":
-            print("DEBUG: Using tkinter fallback for Linux (PDFs)")
-            import tkinter as tk
-            from tkinter import filedialog
-            root = tk.Tk()
-            root.withdraw()  # Hide the main window
-            root.lift()  # Bring to front
-            root.attributes('-topmost', True)  # Force on top
-            files = filedialog.askopenfilenames(
-                title="Select PDFs to Annotate",
-                filetypes=[("PDF files", "*.pdf")]
-            )
-            root.destroy()
+            print("DEBUG: Using native file picker for Linux (PDFs)")
+            try:
+                # Try zenity first (most reliable on Linux)
+                import subprocess
+                result = subprocess.run(['zenity', '--file-selection', '--multiple', '--file-filter=PDF files|*.pdf'], 
+                                      capture_output=True, text=True)
+                if result.returncode == 0:
+                    files = result.stdout.strip().split('|')
+                    if files and files[0]:
+                        print(f"DEBUG: Zenity selected {len(files)} PDF files")
+                        class MockFilePickerFile:
+                            def __init__(self, path):
+                                self.path = path
+                                self.name = os.path.basename(path)
+                        
+                        file_objects = [MockFilePickerFile(f) for f in files]
+                        self.on_annotate_files_picked(type('obj', (object,), {'files': file_objects})())
+                        return
+                        
+            except Exception as zenity_ex:
+                print(f"DEBUG: Zenity failed: {zenity_ex}")
+                
+            try:
+                # Try kdialog as fallback
+                result = subprocess.run(['kdialog', '--getopenfilename', '/home', 'PDF files (*.pdf)'], 
+                                      capture_output=True, text=True)
+                if result.returncode == 0 and result.stdout.strip():
+                    files = [result.stdout.strip()]
+                    print(f"DEBUG: KDialog selected {len(files)} PDF files")
+                    class MockFilePickerFile:
+                        def __init__(self, path):
+                            self.path = path
+                            self.name = os.path.basename(path)
+                    
+                    file_objects = [MockFilePickerFile(f) for f in files]
+                    self.on_annotate_files_picked(type('obj', (object,), {'files': file_objects})())
+                    return
+                    
+            except Exception as kdialog_ex:
+                print(f"DEBUG: KDialog failed: {kdialog_ex}")
+                
+            # If all GUI methods fail, show a simple text input
+            self.show_error("No file picker available. Please enter file paths manually in the console.")
+            print("Please enter the full path to your PDF files (one per line, empty line to finish):")
+            files = []
+            while True:
+                file_path = input("File path: ").strip()
+                if not file_path:
+                    break
+                if os.path.exists(file_path):
+                    files.append(file_path)
+                else:
+                    print(f"File not found: {file_path}")
+            
             if files:
-                print(f"DEBUG: Tkinter selected {len(files)} PDF files")
-                # Convert to Flet file objects - create a simple object that mimics FilePickerFile
+                print(f"DEBUG: Manual input selected {len(files)} PDF files")
                 class MockFilePickerFile:
                     def __init__(self, path):
                         self.path = path
@@ -1014,10 +1096,13 @@ class ImageToPDFApp:
         
     def add_text_to_pdf(self, input_pdf_path, output_pdf_path, community_text):
         """Add community text overlay to existing PDF"""
+        from PyPDF2 import PdfReader, PdfWriter
         from reportlab.pdfgen import canvas
         from reportlab.lib.pagesizes import letter
-        from PyPDF2 import PdfReader, PdfWriter
+        from reportlab.lib.utils import ImageReader
         import io
+        import tempfile
+        from PIL import Image
         
         # Read the existing PDF
         reader = PdfReader(input_pdf_path)
@@ -1027,40 +1112,90 @@ class ImageToPDFApp:
         text_area_height = 100
         
         for page_num, page in enumerate(reader.pages):
-            # Create overlay with text
+            # Create a new page with the text overlay and scaled original content
             packet = io.BytesIO()
-            overlay_canvas = canvas.Canvas(packet, pagesize=letter)
+            new_canvas = canvas.Canvas(packet, pagesize=letter)
             
             # Add white background for text area at top
-            overlay_canvas.setFillColor(white)
-            overlay_canvas.rect(0, page_height - text_area_height, page_width, text_area_height, fill=1, stroke=0)
+            new_canvas.setFillColor(white)
+            new_canvas.rect(0, page_height - text_area_height, page_width, text_area_height, fill=1, stroke=0)
             
             # Add community text
-            overlay_canvas.setFillColor(black)
-            overlay_canvas.setFont("Helvetica", 12)
+            new_canvas.setFillColor(black)
+            new_canvas.setFont("Helvetica", 12)
             
-            lines = self.wrap_text(community_text, page_width - 20, overlay_canvas)
+            lines = self.wrap_text(community_text, page_width - 20, new_canvas)
             y_pos = page_height - 20
             for line in lines:
                 if line == "":  # Empty line for paragraph breaks
                     y_pos -= 8
                 else:
-                    overlay_canvas.drawString(10, y_pos, line)
+                    new_canvas.drawString(10, y_pos, line)
                     y_pos -= 15
                     
             # Page indicator
-            overlay_canvas.setFont("Helvetica", 8)
-            overlay_canvas.drawString(page_width - 80, page_height - 15, f"Page {page_num+1} of {len(reader.pages)}")
+            new_canvas.setFont("Helvetica", 8)
+            new_canvas.drawString(page_width - 80, page_height - 15, f"Page {page_num+1} of {len(reader.pages)}")
             
-            overlay_canvas.save()
+            # Convert the original page to an image and add it scaled
+            try:
+                # Create a temporary PDF with just this page
+                temp_pdf = io.BytesIO()
+                temp_writer = PdfWriter()
+                temp_writer.add_page(page)
+                temp_writer.write(temp_pdf)
+                temp_pdf.seek(0)
+                
+                # Convert PDF page to image using pdf2image
+                try:
+                    from pdf2image import convert_from_bytes
+                    images = convert_from_bytes(temp_pdf.getvalue(), dpi=150)
+                    if images:
+                        # Get the first (and only) image
+                        page_image = images[0]
+                        
+                        # Calculate scale to fit in the remaining space
+                        available_height = page_height - text_area_height
+                        scale_x = page_width / page_image.width
+                        scale_y = available_height / page_image.height
+                        scale = min(scale_x, scale_y)  # Maintain aspect ratio
+                        
+                        # Calculate position to center the scaled content
+                        scaled_width = page_image.width * scale
+                        scaled_height = page_image.height * scale
+                        x_offset = (page_width - scaled_width) / 2
+                        y_offset = (available_height - scaled_height) / 2
+                        
+                        # Add the scaled image to the canvas
+                        new_canvas.saveState()
+                        new_canvas.translate(x_offset, y_offset)
+                        new_canvas.scale(scale, scale)
+                        new_canvas.drawImage(ImageReader(page_image), 0, 0, width=page_image.width, height=page_image.height)
+                        new_canvas.restoreState()
+                        
+                    else:
+                        raise Exception("No images generated from PDF page")
+                        
+                except ImportError:
+                    # pdf2image not available, use a different approach
+                    print("pdf2image not available, using alternative method")
+                    raise Exception("pdf2image not available")
+                    
+            except Exception as e:
+                print(f"Warning: Could not convert page {page_num + 1} to image: {e}")
+                # Add a placeholder if we can't process the original content
+                new_canvas.setFillColor(black)
+                new_canvas.setFont("Helvetica", 10)
+                new_canvas.drawString(10, page_height - text_area_height - 20, f"Original page content (page {page_num + 1})")
+            
+            new_canvas.save()
             
             # Move to the beginning of the StringIO buffer
             packet.seek(0)
-            overlay_pdf = PdfReader(packet)
+            new_pdf = PdfReader(packet)
             
-            # Merge the overlay with the existing page
-            page.merge_page(overlay_pdf.pages[0])
-            writer.add_page(page)
+            # Add the new page to the writer
+            writer.add_page(new_pdf.pages[0])
             
         # Write the result
         with open(output_pdf_path, 'wb') as output_file:
