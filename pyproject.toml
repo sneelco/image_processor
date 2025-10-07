@@ -11,4 +11,5 @@ dependencies = [
     "pypdf2>=3.0.1",
     "reportlab>=4.4.4",
     "tkinterdnd2>=0.4.3",
+    "pdf2image>=1.17.0",
 ]
